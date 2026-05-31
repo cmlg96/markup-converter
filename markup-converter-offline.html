@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Markup Converter · Field Maps</title>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e1117;
+    --surface: #161b26;
+    --border: #252d3d;
+    --accent: #3b82f6;
+    --accent2: #22d3ee;
+    --text: #e8edf5;
+    --muted: #5a6478;
+    --success: #22c55e;
+    --error: #f87171;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    overflow-x: hidden;
+  }
+
+  /* Background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(59,130,246,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59,130,246,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 540px;
+  }
+
+  header {
+    margin-bottom: 2.5rem;
+    text-align: center;
+  }
+
+  .badge {
+    display: inline-block;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    color: var(--accent2);
+    border: 1px solid rgba(34,211,238,0.3);
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    margin-bottom: 1rem;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    font-size: clamp(1.8rem, 6vw, 2.6rem);
+    font-weight: 800;
+    line-height: 1.1;
+    background: linear-gradient(135deg, var(--text) 40%, var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 0.6rem;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 400;
+  }
+
+  /* Drop zone */
+  .dropzone {
+    background: var(--surface);
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    padding: 3rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    margin-bottom: 1.5rem;
+  }
+
+  .dropzone:hover, .dropzone.drag-over {
+    border-color: var(--accent);
+    background: rgba(59,130,246,0.05);
+  }
+
+  .dropzone input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
+
+  .drop-icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .drop-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+  }
+
+  .drop-hint {
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+
+  /* File loaded state */
+  .file-loaded {
+    display: none;
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    border-radius: 16px;
+    padding: 1.2rem 1.5rem;
+    margin-bottom: 1.5rem;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .file-loaded.visible { display: flex; }
+
+  .file-icon {
+    width: 40px; height: 40px;
+    background: rgba(59,130,246,0.15);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .file-info { flex: 1; min-width: 0; }
+  .file-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .file-meta {
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 0.15rem;
+  }
+
+  .remove-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 0.2rem;
+    transition: color 0.15s;
+    flex-shrink: 0;
+  }
+  .remove-btn:hover { color: var(--error); }
+
+  /* Format selector */
+  .section-label {
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+  }
+
+  .format-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.6rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .format-btn {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 0.8rem 0.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  .format-btn:hover {
+    border-color: var(--accent);
+  }
+
+  .format-btn.selected {
+    border-color: var(--accent);
+    background: rgba(59,130,246,0.12);
+  }
+
+  .format-btn .fmt-name {
+    display: block;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+
+  .format-btn .fmt-desc {
+    display: block;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--muted);
+    margin-top: 0.2rem;
+  }
+
+  /* Convert button */
+  .convert-btn {
+    width: 100%;
+    padding: 1rem;
+    background: linear-gradient(135deg, var(--accent), #2563eb);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    margin-bottom: 1rem;
+    letter-spacing: 0.03em;
+  }
+
+  .convert-btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+  .convert-btn:active:not(:disabled) { transform: translateY(0); }
+  .convert-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Result */
+  .result {
+    display: none;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+  .result.success {
+    display: block;
+    background: rgba(34,197,94,0.1);
+    border: 1px solid rgba(34,197,94,0.3);
+    color: var(--success);
+  }
+  .result.error {
+    display: block;
+    background: rgba(248,113,113,0.1);
+    border: 1px solid rgba(248,113,113,0.3);
+    color: var(--error);
+  }
+
+  /* Stats */
+  .stats {
+    display: none;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+  }
+  .stats.visible { display: flex; }
+  .stat {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.7rem;
+    text-align: center;
+  }
+  .stat-val {
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: var(--accent2);
+    display: block;
+  }
+  .stat-lbl {
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  /* Download buttons */
+  .downloads {
+    display: none;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .downloads.visible { display: flex; }
+
+  .dl-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.8rem 1rem;
+    cursor: pointer;
+    text-decoration: none;
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-weight: 600;
+    font-size: 0.88rem;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dl-btn:hover {
+    border-color: var(--success);
+    background: rgba(34,197,94,0.05);
+  }
+  .dl-icon { font-size: 1.1rem; }
+  .dl-info { flex: 1; }
+  .dl-name { display: block; }
+  .dl-size {
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+  .dl-arrow { color: var(--muted); }
+
+
+
+
+  .watermark {
+    position: fixed;
+    bottom: 1.2rem;
+    right: 1.4rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    z-index: 100;
+    pointer-events: none;
+  }
+  .watermark-tree { font-size: 0.9rem; line-height: 1; }
+  .watermark-text { text-align: left; }
+  .watermark-name {
+    display: block;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent2);
+    letter-spacing: 0.04em;
+  }
+  .watermark-role {
+    display: block;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+
+  .firma-inline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  .firma-tree { font-size: 0.85rem; line-height: 1; }
+  .firma-text { text-align: left; }
+  .firma-name {
+    display: block;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--accent2);
+    letter-spacing: 0.04em;
+  }
+  .firma-role {
+    display: block;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+  footer {
+    text-align: center;
+    margin-top: 2rem;
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .watermark {
+    position: fixed;
+    bottom: 1.2rem;
+    right: 1.4rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    opacity: 0.35;
+    transition: opacity 0.2s;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .watermark:hover { opacity: 0.6; }
+  .watermark-tree {
+    font-size: 0.9rem;
+    line-height: 1;
+  }
+  .watermark-text {
+    font-family: 'Consolas', 'SF Mono', 'Fira Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.4;
+    color: var(--text);
+    text-align: left;
+  }
+  .watermark-name {
+    display: block;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .watermark-role {
+    display: block;
+    color: var(--muted);
+    font-size: 0.6rem;
+    letter-spacing: 0.02em;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="badge">ArcGIS Field Maps</div>
+    <h1>Markup Converter</h1>
+    <p class="subtitle">Convierte archivos .markup a KML, GeoJSON o ambos</p>
+
+  </header>
+
+  <!-- Drop zone -->
+  <div class="dropzone" id="dropzone">
+    <input type="file" id="fileInput" accept=".markup">
+    <span class="drop-icon">📂</span>
+    <div class="drop-title">Arrastra tu archivo aquí</div>
+    <div class="drop-hint">o toca para seleccionar · solo .markup</div>
+  </div>
+
+  <!-- File loaded -->
+  <div class="file-loaded" id="fileLoaded">
+    <div class="file-icon">📍</div>
+    <div class="file-info">
+      <div class="file-name" id="fileName">—</div>
+      <div class="file-meta" id="fileMeta">—</div>
+    </div>
+    <button class="remove-btn" id="removeBtn" title="Quitar archivo">✕</button>
+  </div>
+
+  <!-- Format selector -->
+  <div class="section-label">Formato de salida</div>
+  <div class="format-grid">
+    <div class="format-btn selected" data-fmt="kml">
+      <span class="fmt-name">KML</span>
+    </div>
+    <div class="format-btn" data-fmt="geojson">
+      <span class="fmt-name">GeoJSON</span>
+    </div>
+    <div class="format-btn" data-fmt="both">
+      <span class="fmt-name">Ambos</span>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats" id="stats">
+    <div class="stat"><span class="stat-val" id="statPoly">0</span><span class="stat-lbl">Polígonos</span></div>
+    <div class="stat"><span class="stat-val" id="statLine">0</span><span class="stat-lbl">Líneas</span></div>
+    <div class="stat"><span class="stat-val" id="statPoint">0</span><span class="stat-lbl">Puntos</span></div>
+  </div>
+
+  <!-- Convert -->
+  <button class="convert-btn" id="convertBtn" disabled>Convertir</button>
+
+  <!-- Result message -->
+  <div class="result" id="result"></div>
+
+  <!-- Downloads -->
+  <div class="downloads" id="downloads"></div>
+
+
+  <div class="firma-inline">
+    <span class="firma-tree">🌲</span>
+    <div class="firma-text">
+      <span class="firma-name">Clara M.</span>
+      <span class="firma-role">Técnica de planificación forestal</span>
+    </div>
+  </div>
+
+  <footer>Procesado localmente · ningún dato sale de tu dispositivo</footer>
+</div>
+
+<script>
+// ── Proyección Web Mercator → WGS84 (sin librería externa) ──
+function mercatorToWgs84(x, y) {
+  const lon = (x / 20037508.342789244) * 180;
+  let lat = (y / 20037508.342789244) * 180;
+  lat = (180 / Math.PI) * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
+  return [lon, lat];
+}
+
+function isWebMercator(wkid) {
+  return wkid === 102100 || wkid === 3857;
+}
+
+function toWgs84(x, y, wkid) {
+  if (isWebMercator(wkid)) return mercatorToWgs84(x, y);
+  if (wkid === 4326) return [x, y];
+  // fallback — assume Web Mercator
+  return mercatorToWgs84(x, y);
+}
+
+// ── Parse markup ──
+function parseMarkup(text) {
+  const data = JSON.parse(text);
+  const elements = data.elements || [];
+  const features = [];
+
+  elements.forEach(el => {
+    const geom = el.geometry;
+    const attrs = el.attributes || {};
+    const wkid = geom?.spatialReference?.wkid || 3857;
+    const name = attrs.name || 'Markup';
+    const color = attrs.color ?? 0;
+
+    if (geom.rings) {
+      // Polygon
+      const rings = geom.rings.map(ring =>
+        ring.map(([x, y]) => toWgs84(x, y, wkid))
+      );
+      features.push({ type: 'polygon', name, color, rings });
+    } else if (geom.paths) {
+      // Polyline
+      const paths = geom.paths.map(path =>
+        path.map(([x, y]) => toWgs84(x, y, wkid))
+      );
+      features.push({ type: 'line', name, color, paths });
+    } else if (geom.x !== undefined) {
+      // Point
+      const [lon, lat] = toWgs84(geom.x, geom.y, wkid);
+      features.push({ type: 'point', name, color, lon, lat });
+    }
+  });
+
+  return features;
+}
+
+// ── KML color from ESRI color int ──
+function esriColorToKml(colorInt) {
+  // ESRI stores color as ABGR int; default red if 0
+  if (!colorInt) return 'ff0000ff'; // red
+  const hex = colorInt.toString(16).padStart(8, '0');
+  return hex; // already ABGR
+}
+
+// ── Build KML ──
+function buildKml(features, fileName) {
+  let placemarks = '';
+  features.forEach(f => {
+    const kmlColor = esriColorToKml(f.color);
+    const fillColor = kmlColor.replace(/^(..)/, '66'); // semi-transparent fill
+
+    if (f.type === 'polygon') {
+      const outerRing = f.rings[0];
+      const coordStr = outerRing.map(([lon, lat]) => `${lon},${lat},0`).join(' ');
+      placemarks += `  <Placemark>
+    <name>${escXml(f.name)}</name>
+    <Style>
+      <LineStyle><color>ff${kmlColor.slice(2)}</color><width>2</width></LineStyle>
+      <PolyStyle><color>${fillColor}</color></PolyStyle>
+    </Style>
+    <Polygon><outerBoundaryIs><LinearRing>
+      <coordinates>${coordStr}</coordinates>
+    </LinearRing></outerBoundaryIs></Polygon>
+  </Placemark>\n`;
+    } else if (f.type === 'line') {
+      f.paths.forEach(path => {
+        const coordStr = path.map(([lon, lat]) => `${lon},${lat},0`).join(' ');
+        placemarks += `  <Placemark>
+    <name>${escXml(f.name)}</name>
+    <Style><LineStyle><color>ff${kmlColor.slice(2)}</color><width>2</width></LineStyle></Style>
+    <LineString><coordinates>${coordStr}</coordinates></LineString>
+  </Placemark>\n`;
+      });
+    } else if (f.type === 'point') {
+      placemarks += `  <Placemark>
+    <name>${escXml(f.name)}</name>
+    <Point><coordinates>${f.lon},${f.lat},0</coordinates></Point>
+  </Placemark>\n`;
+    }
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>${escXml(fileName)}</name>
+${placemarks}</Document>
+</kml>`;
+}
+
+// ── Build GeoJSON ──
+function buildGeoJson(features) {
+  const geoFeatures = features.map(f => {
+    let geometry;
+    if (f.type === 'polygon') {
+      geometry = { type: 'Polygon', coordinates: f.rings.map(r => r.map(([lon, lat]) => [lon, lat])) };
+    } else if (f.type === 'line') {
+      if (f.paths.length === 1) {
+        geometry = { type: 'LineString', coordinates: f.paths[0].map(([lon, lat]) => [lon, lat]) };
+      } else {
+        geometry = { type: 'MultiLineString', coordinates: f.paths.map(p => p.map(([lon, lat]) => [lon, lat])) };
+      }
+    } else {
+      geometry = { type: 'Point', coordinates: [f.lon, f.lat] };
+    }
+    return { type: 'Feature', properties: { name: f.name }, geometry };
+  });
+  return JSON.stringify({ type: 'FeatureCollection', features: geoFeatures }, null, 2);
+}
+
+function escXml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  return (n/1048576).toFixed(1) + ' MB';
+}
+
+function download(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return { url, size: blob.size };
+}
+
+// ── State ──
+let parsedFeatures = null;
+let rawText = null;
+let currentFileName = '';
+let selectedFormat = 'kml';
+
+// ── UI refs ──
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileLoaded = document.getElementById('fileLoaded');
+const fileNameEl = document.getElementById('fileName');
+const fileMetaEl = document.getElementById('fileMeta');
+const removeBtn = document.getElementById('removeBtn');
+const convertBtn = document.getElementById('convertBtn');
+const resultEl = document.getElementById('result');
+const downloadsEl = document.getElementById('downloads');
+const statsEl = document.getElementById('stats');
+const formatBtns = document.querySelectorAll('.format-btn');
+
+// ── Format selection ──
+formatBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    formatBtns.forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    selectedFormat = btn.dataset.fmt;
+  });
+});
+
+// ── File load ──
+function loadFile(file) {
+  if (!file || !file.name.endsWith('.markup')) {
+    showResult('error', 'El archivo debe tener extensión .markup');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    rawText = e.target.result;
+    currentFileName = file.name.replace('.markup', '');
+    try {
+      parsedFeatures = parseMarkup(rawText);
+      dropzone.style.display = 'none';
+      fileLoaded.classList.add('visible');
+      fileNameEl.textContent = file.name;
+      fileMetaEl.textContent = `${formatBytes(file.size)} · ${parsedFeatures.length} elemento(s)`;
+      convertBtn.disabled = false;
+      resultEl.className = 'result';
+      downloadsEl.classList.remove('visible');
+      downloadsEl.innerHTML = '';
+      // stats
+      const poly = parsedFeatures.filter(f => f.type === 'polygon').length;
+      const line = parsedFeatures.filter(f => f.type === 'line').length;
+      const point = parsedFeatures.filter(f => f.type === 'point').length;
+      document.getElementById('statPoly').textContent = poly;
+      document.getElementById('statLine').textContent = line;
+      document.getElementById('statPoint').textContent = point;
+      statsEl.classList.add('visible');
+    } catch(err) {
+      showResult('error', 'No se pudo leer el archivo: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
+
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag-over');
+  loadFile(e.dataTransfer.files[0]);
+});
+
+removeBtn.addEventListener('click', () => {
+  parsedFeatures = null; rawText = null; currentFileName = '';
+  fileLoaded.classList.remove('visible');
+  dropzone.style.display = '';
+  convertBtn.disabled = true;
+  resultEl.className = 'result';
+  downloadsEl.classList.remove('visible');
+  downloadsEl.innerHTML = '';
+  statsEl.classList.remove('visible');
+  fileInput.value = '';
+});
+
+// ── Convert ──
+convertBtn.addEventListener('click', () => {
+  if (!parsedFeatures) return;
+  downloadsEl.innerHTML = '';
+
+  try {
+    const files = [];
+
+    if (selectedFormat === 'kml' || selectedFormat === 'both') {
+      const kml = buildKml(parsedFeatures, currentFileName);
+      files.push({ content: kml, filename: currentFileName + '.kml', mime: 'application/vnd.google-earth.kml+xml', label: 'KML', icon: '🌍' });
+    }
+    if (selectedFormat === 'geojson' || selectedFormat === 'both') {
+      const gj = buildGeoJson(parsedFeatures);
+      files.push({ content: gj, filename: currentFileName + '.geojson', mime: 'application/geo+json', label: 'GeoJSON', icon: '🗺️' });
+    }
+
+    files.forEach(f => {
+      const blob = new Blob([f.content], { type: f.mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.className = 'dl-btn';
+      a.href = url;
+      a.download = f.filename;
+      a.innerHTML = `<span class="dl-icon">${f.icon}</span>
+        <span class="dl-info">
+          <span class="dl-name">${f.filename}</span>
+          <span class="dl-size">${formatBytes(blob.size)}</span>
+        </span>
+        <span class="dl-arrow">↓</span>`;
+      downloadsEl.appendChild(a);
+    });
+
+    downloadsEl.classList.add('visible');
+    showResult('success', `✓ ${files.length === 2 ? 'Dos archivos' : 'Archivo'} listo${files.length === 2 ? 's' : ''} para descargar`);
+  } catch(err) {
+    showResult('error', 'Error al convertir: ' + err.message);
+  }
+});
+
+function showResult(type, msg) {
+  resultEl.className = 'result ' + type;
+  resultEl.textContent = msg;
+}
+</script>
+
+
+</body>
+</html>

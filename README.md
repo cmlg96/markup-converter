@@ -58,6 +58,10 @@ Lo que me parece más valioso de este proceso no es la herramienta en sí, sino 
 Quienes trabajamos con GIS tenemos la responsabilidad — y la oportunidad — de tender puentes entre las herramientas y las personas que las usan en campo. Herramientas como la IA nos permiten hacerlo más rápido y mejor, siempre que sepamos hacer las preguntas correctas y pensar en quién va a usar lo que construimos.
  
 ---
+## 🆕 Novedades
 
+- Ahora acepta archivos **GeoJSON** además de `.markup`.
+- El formato se detecta automáticamente al cargar el archivo.
+- Todo sigue funcionando **sin conexión** y sin enviar datos a ningún servidor.
  
 

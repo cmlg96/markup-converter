@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Garantía técnica: sin red, sin orígenes externos, sin envío de datos -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
 <title>Markup Converter · Field Maps</title>
 
 <style>
@@ -455,16 +459,16 @@
   <header>
     <div class="badge">ArcGIS Field Maps</div>
     <h1>Markup Converter</h1>
-    <p class="subtitle">Convierte archivos .markup a KML, GeoJSON o ambos</p>
+    <p class="subtitle">Convierte archivos .markup y GeoJSON a KML, GeoJSON o ambos</p>
 
   </header>
 
   <!-- Drop zone -->
   <div class="dropzone" id="dropzone">
-    <input type="file" id="fileInput" accept=".markup">
+    <input type="file" id="fileInput" accept=".markup,.geojson,.json">
     <span class="drop-icon">📂</span>
     <div class="drop-title">Arrastra tu archivo aquí</div>
-    <div class="drop-hint">o toca para seleccionar · solo .markup</div>
+    <div class="drop-hint">o toca para seleccionar · .markup · .geojson · .json</div>
   </div>
 
   <!-- File loaded -->
@@ -539,6 +543,140 @@ function toWgs84(x, y, wkid) {
   return mercatorToWgs84(x, y);
 }
 
+// ── Parse GeoJSON ──
+// Normaliza cualquier GeoJSON al MISMO modelo interno que usa .markup,
+// de modo que buildKml() y buildGeoJson() no necesitan saber el origen.
+
+const NAME_KEYS = ['name','Name','NAME','nombre','Nombre','NOMBRE','title','Title',
+                   'titulo','título','label','Label','descripcion','descripción','id','ID'];
+
+function pickName(props, fallback) {
+  if (props) {
+    for (const k of NAME_KEYS) {
+      const v = props[k];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+    }
+  }
+  return fallback;
+}
+
+// #rrggbb / #rgb / rrggbb  →  KML aabbggrr
+function hexToKmlColor(hex, opacity) {
+  if (typeof hex !== 'string') return null;
+  let h = hex.trim().replace(/^#/, '');
+  if (/^[0-9a-fA-F]{3}$/.test(h)) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  const r = h.slice(0,2), g = h.slice(2,4), b = h.slice(4,6);
+  let a = 'ff';
+  if (typeof opacity === 'number' && opacity >= 0 && opacity <= 1) {
+    a = Math.round(opacity * 255).toString(16).padStart(2, '0');
+  }
+  return (a + b + g + r).toLowerCase();
+}
+
+// Soporta la simplestyle-spec (geojson.io, GitHub, QGIS export…)
+function pickColor(props) {
+  if (!props) return null;
+  const cand = props.stroke ?? props['marker-color'] ?? props.fill ??
+               props.color ?? props.colour ?? props.Color;
+  const op = typeof props['stroke-opacity'] === 'number' ? props['stroke-opacity'] : undefined;
+  return hexToKmlColor(cand, op);
+}
+
+// Recorre coordenadas anidadas para muestrear valores
+function sampleCoords(node, out, max) {
+  if (out.length >= max || node == null) return;
+  if (Array.isArray(node) && typeof node[0] === 'number' && typeof node[1] === 'number') {
+    out.push(node); return;
+  }
+  if (Array.isArray(node)) { for (const n of node) { sampleCoords(n, out, max); if (out.length >= max) return; } }
+}
+
+// Detecta si el GeoJSON viene en Web Mercator (no estándar, pero frecuente)
+function detectMercator(root, feats) {
+  const crsName = root && root.crs && root.crs.properties && root.crs.properties.name;
+  if (typeof crsName === 'string') {
+    if (/3857|102100|900913|3785/.test(crsName)) return true;
+    if (/4326|CRS84/i.test(crsName)) return false;
+  }
+  const sample = [];
+  for (const ft of feats) {
+    const g = ft && ft.geometry;
+    if (g && g.coordinates) sampleCoords(g.coordinates, sample, 20);
+    if (sample.length >= 20) break;
+  }
+  if (!sample.length) return false;
+  return sample.some(c => Math.abs(c[0]) > 180 || Math.abs(c[1]) > 90);
+}
+
+function parseGeoJson(text) {
+  const data = (typeof text === 'string') ? JSON.parse(text) : text;
+  let rawFeats;
+
+  if (data.type === 'FeatureCollection') {
+    rawFeats = Array.isArray(data.features) ? data.features : [];
+  } else if (data.type === 'Feature') {
+    rawFeats = [data];
+  } else if (data.type === 'GeometryCollection') {
+    rawFeats = (data.geometries || []).map(g => ({ type: 'Feature', geometry: g, properties: {} }));
+  } else if (typeof data.type === 'string') {
+    rawFeats = [{ type: 'Feature', geometry: data, properties: {} }];
+  } else {
+    throw new Error('estructura GeoJSON no reconocida');
+  }
+
+  const mercator = detectMercator(data, rawFeats);
+  const cv = c => {
+    const p = mercator ? mercatorToWgs84(c[0], c[1]) : [c[0], c[1]];
+    return (c.length > 2 && typeof c[2] === 'number') ? [p[0], p[1], c[2]] : [p[0], p[1]];
+  };
+
+  const features = [];
+  let skipped = 0;
+
+  function pushGeom(geom, name, props, kmlColor) {
+    if (!geom || !geom.type) { skipped++; return; }
+    const t = geom.type;
+    const co = geom.coordinates;
+
+    if (t === 'GeometryCollection') {
+      (geom.geometries || []).forEach(g => pushGeom(g, name, props, kmlColor));
+      return;
+    }
+    if (!co || !co.length) { skipped++; return; }
+
+    if (t === 'Point') {
+      const p = cv(co);
+      features.push({ type:'point', name, color:0, kmlColor, props, lon:p[0], lat:p[1], alt:p[2] });
+    } else if (t === 'MultiPoint') {
+      co.forEach(c => { const p = cv(c);
+        features.push({ type:'point', name, color:0, kmlColor, props, lon:p[0], lat:p[1], alt:p[2] }); });
+    } else if (t === 'LineString') {
+      features.push({ type:'line', name, color:0, kmlColor, props, paths:[co.map(cv)] });
+    } else if (t === 'MultiLineString') {
+      features.push({ type:'line', name, color:0, kmlColor, props, paths: co.map(p => p.map(cv)) });
+    } else if (t === 'Polygon') {
+      features.push({ type:'polygon', name, color:0, kmlColor, props, rings: co.map(r => r.map(cv)) });
+    } else if (t === 'MultiPolygon') {
+      co.forEach(poly => {
+        features.push({ type:'polygon', name, color:0, kmlColor, props, rings: poly.map(r => r.map(cv)) });
+      });
+    } else {
+      skipped++;
+    }
+  }
+
+  rawFeats.forEach((ft, i) => {
+    const props = (ft && ft.properties && typeof ft.properties === 'object') ? ft.properties : null;
+    const name = pickName(props, (ft && ft.id != null) ? String(ft.id) : 'Feature ' + (i + 1));
+    pushGeom(ft && ft.geometry, name, props, pickColor(props));
+  });
+
+  features.reprojected = mercator;
+  features.skipped = skipped;
+  return features;
+}
+
 // ── Parse markup ──
 function parseMarkup(text) {
   const data = JSON.parse(text);
@@ -582,39 +720,84 @@ function esriColorToKml(colorInt) {
   return hex; // already ABGR
 }
 
+// ── Utilidades de geometría para KML ──
+function coordList(coords) {
+  return coords.map(c => `${c[0]},${c[1]},${(c.length > 2 && typeof c[2] === 'number') ? c[2] : 0}`).join(' ');
+}
+
+// Punto dentro de anillo (ray casting) — sirve para distinguir huecos de polígonos sueltos
+function pointInRing(pt, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (((yi > pt[1]) !== (yj > pt[1])) &&
+        (pt[0] < (xj - xi) * (pt[1] - yi) / ((yj - yi) || 1e-12) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+// Agrupa anillos en {outer, holes}. Un solo anillo → salida idéntica a la versión anterior.
+function groupRings(rings) {
+  const groups = [];
+  (rings || []).forEach(ring => {
+    if (!ring || ring.length < 3) return;
+    let host = null;
+    for (const g of groups) { if (pointInRing(ring[0], g.outer)) { host = g; break; } }
+    if (host) host.holes.push(ring); else groups.push({ outer: ring, holes: [] });
+  });
+  if (!groups.length && rings && rings.length) groups.push({ outer: rings[0], holes: [] });
+  return groups;
+}
+
+// Atributos del GeoJSON → ExtendedData (los .markup no llevan props: salida sin cambios)
+function extendedData(props) {
+  if (!props) return '';
+  const rows = Object.keys(props)
+    .filter(k => props[k] !== null && props[k] !== undefined && typeof props[k] !== 'object')
+    .map(k => `      <Data name="${escAttr(k)}"><value>${escXml(props[k])}</value></Data>`);
+  if (!rows.length) return '';
+  return `\n    <ExtendedData>\n${rows.join('\n')}\n    </ExtendedData>`;
+}
+
 // ── Build KML ──
 function buildKml(features, fileName) {
   let placemarks = '';
   features.forEach(f => {
-    const kmlColor = esriColorToKml(f.color);
+    const kmlColor = f.kmlColor || esriColorToKml(f.color);
     const fillColor = kmlColor.replace(/^(..)/, '66'); // semi-transparent fill
+    const ext = extendedData(f.props);
 
     if (f.type === 'polygon') {
-      const outerRing = f.rings[0];
-      const coordStr = outerRing.map(([lon, lat]) => `${lon},${lat},0`).join(' ');
-      placemarks += `  <Placemark>
+      groupRings(f.rings).forEach(g => {
+        const inner = g.holes.map(h =>
+          `\n      <innerBoundaryIs><LinearRing><coordinates>${coordList(h)}</coordinates></LinearRing></innerBoundaryIs>`
+        ).join('');
+        placemarks += `  <Placemark>
     <name>${escXml(f.name)}</name>
     <Style>
       <LineStyle><color>ff${kmlColor.slice(2)}</color><width>2</width></LineStyle>
       <PolyStyle><color>${fillColor}</color></PolyStyle>
-    </Style>
+    </Style>${ext}
     <Polygon><outerBoundaryIs><LinearRing>
-      <coordinates>${coordStr}</coordinates>
-    </LinearRing></outerBoundaryIs></Polygon>
+      <coordinates>${coordList(g.outer)}</coordinates>
+    </LinearRing></outerBoundaryIs>${inner}</Polygon>
   </Placemark>\n`;
+      });
     } else if (f.type === 'line') {
       f.paths.forEach(path => {
-        const coordStr = path.map(([lon, lat]) => `${lon},${lat},0`).join(' ');
         placemarks += `  <Placemark>
     <name>${escXml(f.name)}</name>
-    <Style><LineStyle><color>ff${kmlColor.slice(2)}</color><width>2</width></LineStyle></Style>
-    <LineString><coordinates>${coordStr}</coordinates></LineString>
+    <Style><LineStyle><color>ff${kmlColor.slice(2)}</color><width>2</width></LineStyle></Style>${ext}
+    <LineString><coordinates>${coordList(path)}</coordinates></LineString>
   </Placemark>\n`;
       });
     } else if (f.type === 'point') {
+      const iconStyle = f.kmlColor
+        ? `\n    <Style><IconStyle><color>${f.kmlColor}</color></IconStyle></Style>` : '';
+      const alt = (typeof f.alt === 'number') ? f.alt : 0;
       placemarks += `  <Placemark>
-    <name>${escXml(f.name)}</name>
-    <Point><coordinates>${f.lon},${f.lat},0</coordinates></Point>
+    <name>${escXml(f.name)}</name>${iconStyle}${ext}
+    <Point><coordinates>${f.lon},${f.lat},${alt}</coordinates></Point>
   </Placemark>\n`;
     }
   });
@@ -629,26 +812,34 @@ ${placemarks}</Document>
 
 // ── Build GeoJSON ──
 function buildGeoJson(features) {
+  const cp = c => (c.length > 2 && typeof c[2] === 'number') ? [c[0], c[1], c[2]] : [c[0], c[1]];
   const geoFeatures = features.map(f => {
     let geometry;
     if (f.type === 'polygon') {
-      geometry = { type: 'Polygon', coordinates: f.rings.map(r => r.map(([lon, lat]) => [lon, lat])) };
+      geometry = { type: 'Polygon', coordinates: f.rings.map(r => r.map(cp)) };
     } else if (f.type === 'line') {
       if (f.paths.length === 1) {
-        geometry = { type: 'LineString', coordinates: f.paths[0].map(([lon, lat]) => [lon, lat]) };
+        geometry = { type: 'LineString', coordinates: f.paths[0].map(cp) };
       } else {
-        geometry = { type: 'MultiLineString', coordinates: f.paths.map(p => p.map(([lon, lat]) => [lon, lat])) };
+        geometry = { type: 'MultiLineString', coordinates: f.paths.map(p => p.map(cp)) };
       }
     } else {
-      geometry = { type: 'Point', coordinates: [f.lon, f.lat] };
+      geometry = { type: 'Point',
+        coordinates: (typeof f.alt === 'number') ? [f.lon, f.lat, f.alt] : [f.lon, f.lat] };
     }
-    return { type: 'Feature', properties: { name: f.name }, geometry };
+    // Los .markup no traen props → properties queda igual que antes: { name }
+    const properties = f.props ? Object.assign({}, f.props, { name: f.name }) : { name: f.name };
+    return { type: 'Feature', properties, geometry };
   });
   return JSON.stringify({ type: 'FeatureCollection', features: geoFeatures }, null, 2);
 }
 
 function escXml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function escAttr(s) {
+  return escXml(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function formatBytes(n) {
@@ -671,6 +862,7 @@ let parsedFeatures = null;
 let rawText = null;
 let currentFileName = '';
 let selectedFormat = 'kml';
+let sourceKind = 'markup'; // 'markup' | 'geojson'
 
 // ── UI refs ──
 const dropzone = document.getElementById('dropzone');
@@ -686,30 +878,59 @@ const statsEl = document.getElementById('stats');
 const formatBtns = document.querySelectorAll('.format-btn');
 
 // ── Format selection ──
+function selectFormat(fmt) {
+  selectedFormat = fmt;
+  formatBtns.forEach(b => b.classList.toggle('selected', b.dataset.fmt === fmt));
+}
+
 formatBtns.forEach(btn => {
-  btn.addEventListener('click', () => {
-    formatBtns.forEach(b => b.classList.remove('selected'));
-    btn.classList.add('selected');
-    selectedFormat = btn.dataset.fmt;
-  });
+  btn.addEventListener('click', () => selectFormat(btn.dataset.fmt));
 });
 
 // ── File load ──
+const ALLOWED_EXT = ['.markup', '.geojson', '.json'];
+
 function loadFile(file) {
-  if (!file || !file.name.endsWith('.markup')) {
-    showResult('error', 'El archivo debe tener extensión .markup');
+  if (!file) return;
+  const lower = file.name.toLowerCase();
+  if (!ALLOWED_EXT.some(ext => lower.endsWith(ext))) {
+    showResult('error', 'El archivo debe ser .markup, .geojson o .json');
     return;
   }
   const reader = new FileReader();
+  reader.onerror = () => showResult('error', 'No se pudo leer el archivo del dispositivo');
   reader.onload = e => {
     rawText = e.target.result;
-    currentFileName = file.name.replace('.markup', '');
+    currentFileName = file.name.replace(/\.(markup|geojson|json)$/i, '');
     try {
-      parsedFeatures = parseMarkup(rawText);
+      // Detección por contenido, no por extensión
+      const data = JSON.parse(rawText);
+      let notes = [];
+
+      if (Array.isArray(data.elements)) {
+        sourceKind = 'markup';
+        parsedFeatures = parseMarkup(rawText);
+      } else if (typeof data.type === 'string') {
+        sourceKind = 'geojson';
+        parsedFeatures = parseGeoJson(data);
+        if (parsedFeatures.reprojected) notes.push('reproyectado desde Web Mercator');
+        if (parsedFeatures.skipped) notes.push(`${parsedFeatures.skipped} sin geometría`);
+      } else {
+        throw new Error('no parece un .markup ni un GeoJSON válido');
+      }
+
+      if (!parsedFeatures.length) throw new Error('el archivo no contiene geometrías');
+
+      // Si el origen ya es GeoJSON, no tiene sentido dejar GeoJSON como única salida
+      if (sourceKind === 'geojson' && selectedFormat === 'geojson') selectFormat('kml');
+
       dropzone.style.display = 'none';
       fileLoaded.classList.add('visible');
+      document.querySelector('.file-icon').textContent = sourceKind === 'geojson' ? '🗺️' : '📍';
       fileNameEl.textContent = file.name;
-      fileMetaEl.textContent = `${formatBytes(file.size)} · ${parsedFeatures.length} elemento(s)`;
+      fileMetaEl.textContent =
+        `${formatBytes(file.size)} · ${sourceKind === 'geojson' ? 'GeoJSON' : '.markup'} · ` +
+        `${parsedFeatures.length} elemento(s)` + (notes.length ? ` · ${notes.join(' · ')}` : '');
       convertBtn.disabled = false;
       resultEl.className = 'result';
       downloadsEl.classList.remove('visible');
@@ -740,7 +961,8 @@ dropzone.addEventListener('drop', e => {
 });
 
 removeBtn.addEventListener('click', () => {
-  parsedFeatures = null; rawText = null; currentFileName = '';
+  parsedFeatures = null; rawText = null; currentFileName = ''; sourceKind = 'markup';
+  document.querySelector('.file-icon').textContent = '📍';
   fileLoaded.classList.remove('visible');
   dropzone.style.display = '';
   convertBtn.disabled = true;
@@ -800,3 +1022,4 @@ function showResult(type, msg) {
 
 </body>
 </html>
+
